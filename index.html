@@ -1166,12 +1166,50 @@ html.locked{overflow:hidden}
     var KEYS=['a','b','s','i','c'];
     var VOL=.85,AC=window.AudioContext||window.webkitAudioContext;
     var ctx=null,master=null,bufs={},nodes={},cur=null,want='a';
-    var userPaused=false,autoSusp=false,opened=false,ticking=false,failed=false;
+    var userPaused=false,autoSusp=false,opened=false,ticking=false,failed=false,hinted=false,silent=null,hintTm=0;
 
     function setUi(){
       var on=!!ctx&&ctx.state==='running';
       root.classList.toggle('music-on',on);
       player.classList.toggle('paused',!on);
+      if(on){
+        pp.classList.remove('pulse');
+        if(hinted){hinted=false;if(cur)nowT.textContent=TR[cur].title;}
+        if(silent&&silent.paused&&!userPaused){try{var q=silent.play();if(q&&q.catch)q.catch(function(){});}catch(e){}}
+      }
+    }
+    /* тихая дорожка: на iPhone из-за неё звук идёт даже при выключенном «беззвучном» режиме */
+    function makeSilent(){
+      try{
+        var n=4000,buf=new ArrayBuffer(44+n),v=new DataView(buf);
+        function str(o,s){for(var i=0;i<s.length;i++)v.setUint8(o+i,s.charCodeAt(i));}
+        str(0,'RIFF');v.setUint32(4,36+n,true);str(8,'WAVE');str(12,'fmt ');v.setUint32(16,16,true);
+        v.setUint16(20,1,true);v.setUint16(22,1,true);v.setUint32(24,8000,true);v.setUint32(28,8000,true);
+        v.setUint16(32,1,true);v.setUint16(34,8,true);str(36,'data');v.setUint32(40,n,true);
+        for(var i=0;i<n;i++)v.setUint8(44+i,128);
+        var a=new Audio();
+        a.src=URL.createObjectURL(new Blob([buf],{type:'audio/wav'}));
+        a.loop=true;a.preload='auto';a.setAttribute('playsinline','');a.volume=.01;
+        return a;
+      }catch(e){return null;}
+    }
+    /* «разбудить» звук: вызывается прямо из касания */
+    function unlock(){
+      try{if(navigator.audioSession)navigator.audioSession.type='playback';}catch(e){}
+      if(!ctx)return;
+      try{
+        if(ctx.state!=='running'){var p=ctx.resume();if(p&&p.then)p.then(setUi,function(){});}
+        var b=ctx.createBuffer(1,1,22050),s=ctx.createBufferSource();
+        s.buffer=b;s.connect(ctx.destination);s.start(0);
+      }catch(e){}
+      if(!silent)silent=makeSilent();
+      if(silent&&!userPaused){try{var q=silent.play();if(q&&q.catch)q.catch(function(){});}catch(e){}}
+    }
+    function hintPlay(){
+      if(!ctx||!opened||userPaused||autoSusp||ctx.state==='running')return;
+      hinted=true;
+      nowT.textContent='Нажми ▶, чтобы включить музыку';
+      pp.classList.add('pulse');
     }
     function decode(key){
       var txt=document.getElementById(TR[key].id).textContent.replace(/\s+/g,'');
@@ -1226,6 +1264,7 @@ html.locked{overflow:hidden}
     function prep(){
       if(ctx||!AC||failed)return;
       try{
+        try{if(navigator.audioSession)navigator.audioSession.type='playback';}catch(e){}
         ctx=new AC();
         master=ctx.createGain();master.gain.value=1;master.connect(ctx.destination);
         ctx.onstatechange=setUi;
@@ -1243,7 +1282,9 @@ html.locked{overflow:hidden}
       root.classList.remove('locked');
       prep();
       if(!ctx)return;
-      try{var p=ctx.resume();if(p&&p.catch)p.catch(function(){});}catch(e){}
+      unlock();
+      clearTimeout(hintTm);
+      hintTm=setTimeout(hintPlay,1200);
       player.hidden=false;
       nowT.textContent=TR.a.title;
       setUi();
@@ -1265,12 +1306,20 @@ html.locked{overflow:hidden}
 
     pp.addEventListener('click',function(){
       if(!ctx)return;
-      if(ctx.state==='running'){userPaused=true;ctx.suspend().then(setUi,setUi);}
-      else{userPaused=false;ctx.resume().then(setUi,setUi);}
+      if(ctx.state==='running'){
+        userPaused=true;
+        if(silent)try{silent.pause();}catch(e){}
+        ctx.suspend().then(setUi,setUi);
+      }else{
+        userPaused=false;
+        unlock();
+        ctx.resume().then(setUi,setUi);
+      }
     });
     document.addEventListener('visibilitychange',function(){
       if(!ctx||!opened)return;
       if(document.hidden){
+        if(silent)try{silent.pause();}catch(e){}
         if(ctx.state==='running'){autoSusp=true;ctx.suspend();}
       }else if(autoSusp&&!userPaused){
         autoSusp=false;ctx.resume();
@@ -1278,12 +1327,14 @@ html.locked{overflow:hidden}
     });
     /* на iPhone звук иногда стартует только после следующего касания */
     function retry(){
-      if(ctx&&opened&&ctx.state==='suspended'&&!userPaused&&!autoSusp){
-        try{ctx.resume();}catch(e){}
-      }
+      if(!ctx||!opened)return;
+      if(ctx.state==='running'){if(hinted||player.classList.contains('paused'))setUi();}
+      else if(!userPaused&&!autoSusp)unlock();
     }
-    document.addEventListener('touchend',retry,{passive:true});
-    document.addEventListener('click',retry);
+    document.addEventListener('touchend',retry,{passive:true,capture:true});
+    document.addEventListener('pointerup',retry,true);
+    document.addEventListener('click',retry,true);
+    document.addEventListener('keydown',retry,true);
     window.addEventListener('scroll',onScroll,{passive:true});
     window.addEventListener('resize',onScroll);
   });
