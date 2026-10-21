@@ -300,6 +300,18 @@ html.locked{overflow:hidden}
   background:linear-gradient(135deg,var(--gold),#FFB4A0);color:var(--gold-ink)}
 .pp svg{width:18px;height:18px;fill:currentColor}
 .pp .i-play{display:none}
+
+/* подсказка: музыка не включилась */
+.nudge{position:fixed;inset:0;z-index:39;opacity:0;visibility:hidden;transition:opacity .45s ease,visibility 0s linear .45s;cursor:pointer;
+  background:radial-gradient(circle 190px at calc(100% - 130px) calc(100% - 38px),rgba(6,7,20,0) 0,rgba(6,7,20,.35) 62%,rgba(6,7,20,.84) 100%)}
+.nudge.on{opacity:1;visibility:visible;transition:opacity .45s ease}
+.nudge-msg{position:absolute;right:max(16px,env(safe-area-inset-right,0px));bottom:calc(max(12px,env(safe-area-inset-bottom,0px)) + 92px);
+  max-width:min(300px,calc(100vw - 32px));margin:0;text-align:right;font:700 clamp(1.1rem,4.6vw,1.4rem)/1.3 var(--f-display);color:var(--ink);text-shadow:0 2px 14px rgba(0,0,0,.7)}
+.nudge-msg small{display:block;margin-top:6px;font:600 14px/1.4 var(--f-body);color:var(--muted)}
+.nudge-arrow{position:absolute;right:max(34px,env(safe-area-inset-right,0px));bottom:calc(max(12px,env(safe-area-inset-bottom,0px)) + 62px);width:28px;height:28px;fill:var(--gold);animation:nudgeBob 1.1s ease-in-out infinite;filter:drop-shadow(0 2px 8px rgba(0,0,0,.6))}
+@keyframes nudgeBob{0%,100%{transform:translateY(-6px)}50%{transform:translateY(5px)}}
+.player.nudged{border-color:var(--gold);animation:nudgeGlow 1.4s ease-in-out infinite;transform:scale(1.06);transform-origin:100% 100%}
+@keyframes nudgeGlow{0%,100%{box-shadow:0 0 0 0 rgba(243,201,122,.55),0 0 26px rgba(243,201,122,.35)}50%{box-shadow:0 0 0 12px rgba(243,201,122,0),0 0 46px rgba(243,201,122,.6)}}
 .player.paused .i-pause{display:none}
 .player.paused .i-play{display:block}
 .now{min-width:0;display:flex;flex-direction:column;line-height:1.2}
@@ -367,7 +379,7 @@ html.locked{overflow:hidden}
 
 @media (prefers-reduced-motion:reduce){
   html{scroll-behavior:auto}
-  .bub{animation:none}.dots i{animation:none}.cap-heart,.hold-heart svg,.eq i,body::before,.pulse,.tap::before,.hold.shake{animation:none}
+  .bub{animation:none}.dots i{animation:none}.cap-heart,.nudge-arrow,.player.nudged,.hold-heart svg,.eq i,body::before,.pulse,.tap::before,.hold.shake{animation:none}
   .car,.env-flap,.letter-wrap,.letter p{transition:none}
 }
 </style>
@@ -722,6 +734,11 @@ html.locked{overflow:hidden}
   <p class="intro-hint">Лучше в наушниках: там будет музыка.</p>
 </div>
 <noscript><style>.intro{display:none!important}</style></noscript>
+
+<div class="nudge" id="nudge" aria-hidden="true">
+  <p class="nudge-msg">Музыка не включилась<small>Нажми ▶ в кружке внизу или в любое место экрана</small></p>
+  <svg class="nudge-arrow" viewBox="0 0 24 24"><path d="M12 21 3 9h6V3h6v6h6z"/></svg>
+</div>
 
 <div class="player" id="player" hidden>
   <button class="pp" id="pp" type="button" aria-label="Пауза или продолжить музыку">
@@ -1154,7 +1171,7 @@ html.locked{overflow:hidden}
   safe(function(){
     var root=document.documentElement;
     var intro=$('intro'),openBtn=$('open'),openWrap=$('open-wrap'),openHint=$('open-hint');
-    var player=$('player'),pp=$('pp'),nowT=$('now-t'),mid=$('mid'),school=$('school'),after=$('after'),love=$('love');
+    var player=$('player'),nudge=$('nudge'),pp=$('pp'),nowT=$('now-t'),mid=$('mid'),school=$('school'),after=$('after'),love=$('love');
     root.classList.add('locked');
     var TR={
       a:{id:'aud-a',title:'Макс Корж — Тает дым'},
@@ -1173,7 +1190,7 @@ html.locked{overflow:hidden}
       root.classList.toggle('music-on',on);
       player.classList.toggle('paused',!on);
       if(on){
-        pp.classList.remove('pulse');
+        pp.classList.remove('pulse');hideNudge();
         if(hinted){hinted=false;if(cur)nowT.textContent=TR[cur].title;}
         if(silent&&silent.paused&&!userPaused){try{var q=silent.play();if(q&&q.catch)q.catch(function(){});}catch(e){}}
       }
@@ -1205,12 +1222,23 @@ html.locked{overflow:hidden}
       if(!silent)silent=makeSilent();
       if(silent&&!userPaused){try{var q=silent.play();if(q&&q.catch)q.catch(function(){});}catch(e){}}
     }
+    var nudged=false;
+    function hideNudge(){
+      nudge.classList.remove('on');player.classList.remove('nudged');
+    }
     function hintPlay(){
       if(!ctx||!opened||userPaused||autoSusp||ctx.state==='running')return;
       hinted=true;
       nowT.textContent='Нажми ▶, чтобы включить музыку';
       pp.classList.add('pulse');
+      if(!nudged){nudged=true;nudge.classList.add('on');player.classList.add('nudged');}
     }
+    nudge.addEventListener('click',function(){
+      hideNudge();
+      if(!ctx)return;
+      userPaused=false;unlock();
+      fadeResume().then(setUi,setUi);
+    });
     function decode(key){
       var txt=document.getElementById(TR[key].id).textContent.replace(/\s+/g,'');
       var bin=atob(txt),u8=new Uint8Array(bin.length);
@@ -1304,25 +1332,64 @@ html.locked{overflow:hidden}
       onKey:open
     });
 
-    pp.addEventListener('click',function(){
+    /* пауза и старт без щелчков: громкость плавно гаснет и только потом останавливается звук */
+    var fadeId=0;
+    function fadeSuspend(){
+      if(!ctx)return Promise.resolve();
+      var id=++fadeId;
+      try{
+        var t=ctx.currentTime;
+        master.gain.cancelScheduledValues(t);
+        master.gain.setValueAtTime(master.gain.value,t);
+        master.gain.linearRampToValueAtTime(0,t+.18);
+      }catch(e){}
+      return new Promise(function(res){
+        setTimeout(function(){
+          if(!ctx||id!==fadeId)return res();
+          ctx.suspend().then(res,res);
+        },230);
+      });
+    }
+    function fadeResume(){
+      if(!ctx)return Promise.resolve();
+      fadeId++;
+      try{master.gain.cancelScheduledValues(ctx.currentTime);master.gain.value=0;}catch(e){}
+      var p=ctx.resume();
+      return (p&&p.then?p:Promise.resolve()).then(function(){
+        try{
+          var t=ctx.currentTime;
+          master.gain.cancelScheduledValues(t);
+          master.gain.setValueAtTime(0,t);
+          master.gain.linearRampToValueAtTime(1,t+.3);
+        }catch(e){}
+      },function(){});
+    }
+    function togglePlay(){
       if(!ctx)return;
-      if(ctx.state==='running'){
+      if(ctx.state==='running'&&!userPaused){
         userPaused=true;
-        if(silent)try{silent.pause();}catch(e){}
-        ctx.suspend().then(setUi,setUi);
+        player.classList.add('paused');root.classList.remove('music-on');
+        fadeSuspend().then(setUi,setUi);
       }else{
         userPaused=false;
         unlock();
-        ctx.resume().then(setUi,setUi);
+        fadeResume().then(setUi,setUi);
       }
-    });
+    }
+    pp.addEventListener('click',togglePlay);
+    try{
+      if('mediaSession' in navigator){
+        navigator.mediaSession.metadata=new MediaMetadata({title:'Для Ярославы',artist:'Антон'});
+        navigator.mediaSession.setActionHandler('play',function(){if(userPaused||(ctx&&ctx.state!=='running'))togglePlay();});
+        navigator.mediaSession.setActionHandler('pause',function(){if(ctx&&ctx.state==='running'&&!userPaused)togglePlay();});
+      }
+    }catch(e){}
     document.addEventListener('visibilitychange',function(){
       if(!ctx||!opened)return;
       if(document.hidden){
-        if(silent)try{silent.pause();}catch(e){}
-        if(ctx.state==='running'){autoSusp=true;ctx.suspend();}
+        if(ctx.state==='running'){autoSusp=true;fadeSuspend().then(function(){if(silent)try{silent.pause();}catch(e){}});}
       }else if(autoSusp&&!userPaused){
-        autoSusp=false;ctx.resume();
+        autoSusp=false;unlock();fadeResume().then(setUi,setUi);
       }
     });
     /* на iPhone звук иногда стартует только после следующего касания */
